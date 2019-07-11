@@ -6,6 +6,7 @@ const chalk = require("chalk");
 const invariant = require("./utils/invariant");
 const inquirer = require("inquirer");
 const runCommand = require("./utils/runCommand");
+const lines = require("./utils/lines");
 
 const createJob = async ({
   flags,
@@ -227,4 +228,63 @@ const createJob = async ({
   };
 };
 
-module.exports = createJob;
+let jobs = [];
+
+const composeJobs = async context => {
+  const create = async () => {
+    try {
+      jobs = [...jobs, await createJob(context)];
+    } catch (e) {
+      console.info(chalk`{red ${e}}`);
+    } finally {
+      await composeJobs(context);
+    }
+  };
+
+  if (!jobs.length) {
+    await create();
+  } else {
+    const selectedJobs = jobs.map((job, index) => ({
+      name: chalk`{red [x]} ${job.targetDependency} {bold ${
+        job.targetVersionResolved
+      }} {grey (${plural("package", "packages", job.targetPackages.length)})}`,
+      value: index,
+    }));
+
+    const { jobManager } = await inquirer.prompt([
+      {
+        name: "jobManager",
+        type: "list",
+        message: lines("Confirm/Cancel installations", ""),
+        default: "confirm",
+        choices: [
+          ...selectedJobs,
+          selectedJobs.length > 1 && {
+            name: chalk`{red [x]} {bold Clear all}`,
+            value: "reset",
+          },
+          new inquirer.Separator(),
+          {
+            name: chalk`{green [+]} Add another...`,
+            value: "create",
+          },
+          { name: chalk`{green.bold [✓]} {bold Confirm}`, value: "confirm" },
+        ].filter(Boolean),
+      },
+    ]);
+
+    if (jobManager === "create") {
+      await create();
+    } else if (jobManager === "reset") {
+      jobs = [];
+      await composeJobs(context);
+    } else if (jobManager !== "confirm") {
+      jobs.splice(jobManager, 1);
+      await composeJobs(context);
+    }
+  }
+
+  return jobs;
+};
+
+module.exports = composeJobs;

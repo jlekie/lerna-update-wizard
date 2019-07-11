@@ -5,19 +5,17 @@ const uniq = require("lodash/uniq");
 const orderBy = require("lodash/orderBy");
 const globby = require("globby");
 const perf = require("execution-time")();
-const fs = require("fs-extra");
 
-const plural = require("./utils/plural");
 const runCommand = require("./utils/runCommand");
 const fileExists = require("./utils/fileExists");
 const ui = require("./utils/ui");
 const invariant = require("./utils/invariant");
 const sanitizeGitBranchName = require("./utils/sanitizeGitBranchName");
-const modifyPackageJson = require("./utils/modifyPackageJson");
 const lines = require("./utils/lines");
 const composeCommand = require("./utils/composeCommand");
 
-const createJob = require("./createJob");
+const composeJobs = require("./composeJobs");
+const runJob = require("./runJob");
 
 inquirer.registerPrompt(
   "autocomplete",
@@ -180,85 +178,15 @@ module.exports = async ({ input, flags }) => {
 
   // INFO GATHER COMPLETE
 
-  // COMPOSE JOBS
-
-  let jobs = [];
-
-  const showJobManager = async () => {
-    const create = async () => {
-      try {
-        jobs = [
-          ...jobs,
-          await createJob({
-            flags,
-            projectName,
-            dependencyMap,
-            allDependencies,
-            packages,
-          }),
-        ];
-      } catch (e) {
-        console.info(chalk`{red ${e}}`);
-      } finally {
-        await showJobManager();
-      }
-    };
-
-    if (!jobs.length) {
-      await create();
-    } else {
-      const selectedJobs = jobs.map((job, index) => ({
-        name: chalk`{red [x]} ${job.targetDependency}@${
-          job.targetVersionResolved
-        } (${plural("package", "packages", job.targetPackages.length)})`,
-        value: index,
-      }));
-
-      const { jobManager } = await inquirer.prompt([
-        {
-          name: "jobManager",
-          type: "list",
-          message: lines("Confirm/Cancel installations", ""),
-          default: "confirm",
-          choices: [
-            ...selectedJobs,
-            selectedJobs.length > 1 && {
-              name: chalk`{red [x]} {bold Clear all}`,
-              value: "reset",
-            },
-            new inquirer.Separator(),
-            {
-              name: chalk`{green [+]} Add another...`,
-              value: "create",
-            },
-            { name: chalk`{green.bold [✓]} {bold Confirm}`, value: "confirm" },
-          ].filter(Boolean),
-        },
-      ]);
-
-      if (jobManager === "create") {
-        await create();
-      } else if (jobManager === "reset") {
-        jobs = [];
-        await showJobManager();
-      } else if (jobManager !== "confirm") {
-        jobs.splice(jobManager, 1);
-        await showJobManager();
-      }
-    }
+  const context = {
+    flags,
+    projectName,
+    dependencyMap,
+    allDependencies,
+    packages,
   };
 
-  await showJobManager();
-
-  const {
-    targetPackages,
-    targetDependency,
-    targetVersion,
-    targetVersionResolved,
-    isNewDependency,
-  } = jobs[0];
-
-  // INSTALL PROCESS START:
+  const jobs = await composeJobs(context);
 
   // PROMPT: Yarn workspaces lazy installation
   if (workspaces && !flags.lazy && !flags.nonInteractive) {
@@ -285,120 +213,27 @@ module.exports = async ({ input, flags }) => {
       },
     ]);
 
-    flags.lazy = useLazy;
+    context.flags.lazy = useLazy;
   }
 
-  perf.start();
-  let totalInstalls = 0;
+  // INSTALL PROCESS START:
 
-  const dependencyManager = (await fileExists(resolve(projectDir, "yarn.lock")))
+  perf.start();
+
+  context.dependencyManager = (await fileExists(
+    resolve(projectDir, "yarn.lock")
+  ))
     ? "yarn"
     : "npm";
 
   // Install process
-  for (let depName of targetPackages) {
-    const existingDependency = dependencyMap[targetDependency];
-
-    let source = "dependencies";
-
-    if (existingDependency && existingDependency.packs[depName]) {
-      const { version, source: theSource } =
-        existingDependency.packs[depName] || {};
-
-      source = theSource;
-
-      if (version === targetVersion) {
-        ui.log.write("");
-        ui.log.write(`Already installed (${targetVersion})`);
-        ui.log.write(chalk.green(`${depName} ✓`));
-        ui.log.write("");
-        continue;
-      }
-    } else if (!flags.newInstallsMode) {
-      const { targetSource } = await inquirer.prompt([
-        {
-          type: "list",
-          name: "targetSource",
-          message: `Select dependency installation type for "${depName}"`,
-          pageSize: 3,
-          choices: [
-            { name: "dependencies" },
-            { name: "devDependencies" },
-            { name: "peerDependencies" },
-          ].filter(Boolean),
-        },
-      ]);
-
-      source = targetSource;
-    } else {
-      source = {
-        prod: "dependencies",
-        dev: "devDependencies",
-        peer: "peerDependencies",
-      }[flags.newInstallsMode];
-    }
-
-    const {
-      path: packageDir,
-      config: { name: packageName },
-    } = packages.find(({ config: { name } }) => name === depName);
-
-    const sourceParam = {
-      yarn: {
-        devDependencies: "--dev",
-        peerDependencies: "--peer",
-      },
-      npm: {
-        dependencies: "--save",
-        devDependencies: "--save-dev",
-      },
-    }[dependencyManager][source || "dependencies"];
-
-    if (
-      // If we're running in lazy mode
-      flags.lazy ||
-      // Or if we're dealing with a peer dependency via npm
-      (source === "peerDependencies" && dependencyManager === "npm")
-    ) {
-      const packageJsonPath = resolve(packageDir, "package.json");
-      const targetPackageJson = require(packageJsonPath);
-
-      fs.writeFileSync(
-        packageJsonPath,
-        modifyPackageJson(targetPackageJson, {
-          [source]: { [targetDependency]: targetVersionResolved },
-        })
-      );
-
-      ui.log.write(
-        chalk`{white.bold ${packageName}}: {green package.json updated ✓}\n`
-      );
-    } else {
-      const installCmd =
-        dependencyManager === "yarn"
-          ? composeCommand(
-              "yarn",
-              "add",
-              sourceParam,
-              flags.installArgs,
-              `${targetDependency}@${targetVersion}`
-            )
-          : composeCommand(
-              "npm",
-              "install",
-              sourceParam,
-              flags.installArgs,
-              `${targetDependency}@${targetVersion}`
-            );
-
-      await runCommand(`cd ${packageDir} && ${installCmd}`, {
-        startMessage: `${chalk.white.bold(depName)}: ${installCmd}`,
-        endMessage: chalk.green(`${depName} ✓`),
-        logTime: true,
-      });
-    }
-    totalInstalls++;
+  for (let job of jobs) {
+    await runJob(job, context);
   }
+
+  return process.exit();
+
+  // INSTALL END
 
   // Final install lazy install after package.json files have been modified
   if (flags.lazy) {
