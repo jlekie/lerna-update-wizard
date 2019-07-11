@@ -4,20 +4,20 @@ const chalk = require("chalk");
 const uniq = require("lodash/uniq");
 const orderBy = require("lodash/orderBy");
 const globby = require("globby");
-const semverCompare = require("semver-compare");
 const perf = require("execution-time")();
 const fs = require("fs-extra");
 
+const plural = require("./utils/plural");
 const runCommand = require("./utils/runCommand");
 const fileExists = require("./utils/fileExists");
 const ui = require("./utils/ui");
-const plural = require("./utils/plural");
 const invariant = require("./utils/invariant");
-const parseDependency = require("./utils/parseDependency");
 const sanitizeGitBranchName = require("./utils/sanitizeGitBranchName");
 const modifyPackageJson = require("./utils/modifyPackageJson");
 const lines = require("./utils/lines");
 const composeCommand = require("./utils/composeCommand");
+
+const createJob = require("./createJob");
 
 inquirer.registerPrompt(
   "autocomplete",
@@ -178,211 +178,87 @@ module.exports = async ({ input, flags }) => {
 
   const allDependencies = Object.keys(dependencyMap);
 
-  ui.log.write(`Starting update wizard for ${chalk.white.bold(projectName)}`);
-  ui.log.write("");
+  // INFO GATHER COMPLETE
 
-  let targetDependency =
-    flags.dependency && parseDependency(flags.dependency).name;
+  // COMPOSE JOBS
 
-  if (!targetDependency) {
-    const { targetDependency: promptedTarget } = await inquirer.prompt([
-      {
-        type: "autocomplete",
-        name: "targetDependency",
-        message: "Select a dependency to upgrade:",
-        pageSize: 15,
-        source: (_ignore_, input) => {
-          const itemize = value => ({
-            value,
-            name: `${chalk.white(value)} ${chalk[dependencyMap[value].color](
-              `(${plural(
-                "version",
-                "versions",
-                dependencyMap[value].versions.length
-              )})`
-            )}`,
-          });
+  let jobs = [];
 
-          const sorter = flags.dedupe
-            ? (a, b) =>
-                dependencyMap[b].versions.length -
-                dependencyMap[a].versions.length
-            : undefined;
+  const showJobManager = async () => {
+    const create = async () => {
+      try {
+        jobs = [
+          ...jobs,
+          await createJob({
+            flags,
+            projectName,
+            dependencyMap,
+            allDependencies,
+            packages,
+          }),
+        ];
+      } catch (e) {
+        console.info(chalk`{red ${e}}`);
+      } finally {
+        await showJobManager();
+      }
+    };
 
-          let results = input
-            ? allDependencies
-                .filter(name => new RegExp(input).test(name))
-                .sort(sorter)
-                .map(itemize)
-            : allDependencies.sort(sorter).map(itemize);
+    if (!jobs.length) {
+      await create();
+    } else {
+      const selectedJobs = jobs.map((job, index) => ({
+        name: chalk`{red [x]} ${job.targetDependency}@${
+          job.targetVersionResolved
+        } (${plural("package", "packages", job.targetPackages.length)})`,
+        value: index,
+      }));
 
-          if (input && !allDependencies.includes(input)) {
-            results = [
-              ...results,
-              {
-                name: `${input} ${chalk.green.bold("[+ADD]")}`,
-                value: input,
-              },
-            ];
-          }
-
-          return Promise.resolve(results);
+      const { jobManager } = await inquirer.prompt([
+        {
+          name: "jobManager",
+          type: "list",
+          message: lines("Confirm/Cancel installations", ""),
+          default: "confirm",
+          choices: [
+            ...selectedJobs,
+            selectedJobs.length > 1 && {
+              name: chalk`{red [x]} {bold Clear all}`,
+              value: "reset",
+            },
+            new inquirer.Separator(),
+            {
+              name: chalk`{green [+]} Add another...`,
+              value: "create",
+            },
+            { name: chalk`{green.bold [✓]} {bold Confirm}`, value: "confirm" },
+          ].filter(Boolean),
         },
-      },
-    ]);
+      ]);
 
-    targetDependency = promptedTarget;
-  }
-
-  // Look up NPM dependency and its versions
-
-  const npmPackageInfoRaw = await runCommand(
-    `npm info ${targetDependency} versions dist-tags --json`,
-    {
-      startMessage: `Fetching package information for "${targetDependency}"`,
-      logOutput: false,
+      if (jobManager === "create") {
+        await create();
+      } else if (jobManager === "reset") {
+        jobs = [];
+        await showJobManager();
+      } else if (jobManager !== "confirm") {
+        jobs.splice(jobManager, 1);
+        await showJobManager();
+      }
     }
-  );
+  };
 
-  const npmPackageInfo = JSON.parse(npmPackageInfoRaw);
+  await showJobManager();
 
-  if (npmPackageInfo.error) {
-    throw new Error(`Could not look up "${targetDependency}" in NPM registry`);
-  }
+  const {
+    targetPackages,
+    targetDependency,
+    targetVersion,
+    targetVersionResolved,
+    isNewDependency,
+  } = jobs[0];
 
-  // Target packages selection
-  const isNewDependency = !allDependencies.includes(targetDependency);
-
-  if (flags.nonInteractive && isNewDependency) {
-    invariant(
-      flags.newInstallsMode,
-      `"${targetDependency}" is a first-time install for one or more packages.`,
-      "In non-interactive mode you must specify the --new-installs-mode flag (prod|dev|peer) in this situation."
-    );
-  }
-
-  let targetPackages;
-
-  if (flags.nonInteractive && !flags.packages) {
-    const installedPackages = packages
-      .filter(
-        ({ config: { name } }) =>
-          !!(
-            dependencyMap[targetDependency] &&
-            dependencyMap[targetDependency].packs[name]
-          )
-      )
-      .map(({ config: { name } }) => name);
-
-    invariant(
-      installedPackages.length > 0,
-      `No packages contain the dependency "${targetDependency}".`,
-      "In non-interactive mode you must specify the --packages flag in this situation,",
-      "so the script can know which packages install it in."
-    );
-
-    targetPackages = installedPackages;
-  } else if (flags.packages) {
-    targetPackages = packages.map(({ config: { name } }) => name);
-  }
-
-  if (!targetPackages) {
-    const { targetPackages: promptedTarget } = await inquirer.prompt([
-      {
-        type: "checkbox",
-        name: "targetPackages",
-        message: "Select packages to affect:",
-        pageSize: 15,
-        choices: packages.map(({ config: { name: packageName } }) => {
-          if (isNewDependency) {
-            return {
-              name: packageName,
-              value: packageName,
-              checked: false,
-            };
-          }
-
-          const { version, source } =
-            dependencyMap[targetDependency].packs[packageName] || {};
-
-          const versionBit = version ? ` (${version})` : "";
-          const sourceBit =
-            source === "devDependencies" ? chalk.white(" (dev)") : "";
-
-          return {
-            name: `${packageName}${versionBit}${sourceBit}`,
-            value: packageName,
-            checked: !!version,
-          };
-        }),
-      },
-    ]);
-
-    targetPackages = promptedTarget;
-  }
-
-  // Target version selection
-  let targetVersion =
-    flags.dependency && parseDependency(flags.dependency).version;
-
-  if (!targetVersion) {
-    const npmVersions = npmPackageInfo.versions.reverse();
-    const npmDistTags = npmPackageInfo["dist-tags"];
-
-    const highestInstalled =
-      !isNewDependency &&
-      dependencyMap[targetDependency].versions.sort(semverCompare).pop();
-
-    const availableVersions = [
-      ...Object.entries(npmDistTags).map(([tag, version]) => ({
-        name: `${version} ${chalk.bold(`#${tag}`)}`,
-        value: version,
-      })),
-      !isNewDependency && {
-        name: `${highestInstalled} ${chalk.bold("Highest installed")}`,
-        value: highestInstalled,
-      },
-      ...npmVersions.filter(
-        version =>
-          version !== highestInstalled &&
-          !Object.values(npmDistTags).includes(version)
-      ),
-    ].filter(Boolean);
-
-    const { targetVersion: promptedTarget } = await inquirer.prompt([
-      {
-        type: "semverList",
-        name: "targetVersion",
-        message: "Select version to install:",
-        pageSize: 10,
-        choices: availableVersions,
-      },
-    ]);
-
-    targetVersion = promptedTarget;
-  }
-  let targetVersionResolved = targetVersion;
-
-  let targetVersionLookup = (await runCommand(
-    `npm info ${targetDependency}@${targetVersion} version`,
-    {
-      startMessage: `Resolving dependency version for "${targetDependency}@${targetVersion}"`,
-      logOutput: false,
-    }
-  )).trim();
-
-  invariant(
-    targetVersionLookup,
-    `The version "${targetVersion}" was not found for "${targetDependency}"`
-  );
-
-  // If targeting a specific tag (such as @latest),
-  const versionFromDistTag = npmPackageInfo["dist-tags"][targetVersion];
-  if (versionFromDistTag) {
-    targetVersionResolved = `^${versionFromDistTag}`;
-  }
-
-  ui.log.write(chalk.green(`Using version ${targetVersionResolved} ✓\n`));
+  // INSTALL PROCESS START:
 
   // PROMPT: Yarn workspaces lazy installation
   if (workspaces && !flags.lazy && !flags.nonInteractive) {
