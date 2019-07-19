@@ -226,12 +226,12 @@ module.exports = async ({ input, flags }) => {
     ? "yarn"
     : "npm";
 
+  let totalInstalls = 0;
+
   // Install process
   for (let job of jobs) {
-    await runJob(job, context);
+    totalInstalls += await runJob(job, context);
   }
-
-  return process.exit();
 
   // INSTALL END
 
@@ -240,12 +240,12 @@ module.exports = async ({ input, flags }) => {
     ui.log.write("");
 
     const installCmd = composeCommand(
-      dependencyManager === "yarn" ? "yarn" : "npm install",
+      context.dependencyManager === "yarn" ? "yarn" : "npm install",
       flags.installArgs
     );
 
     await runCommand(`cd ${projectDir} && ${installCmd}`, {
-      startMessage: `${chalk.white.bold(projectName)}: ${installCmd}`,
+      startMessage: `${chalk.white.bold(context.projectName)}: ${installCmd}`,
       endMessage: chalk.green(`Packages installed ✓`),
       logTime: true,
     });

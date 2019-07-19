@@ -22,9 +22,6 @@ const runJob = async (job, context) => {
 
   const { dependencyMap, flags, packages, dependencyManager } = context;
 
-  // console.log("MARC", packages);
-  // console.log("LOL", dependencyMap);
-
   for (let targetPackageName of targetPackages) {
     const existingDependency = dependencyMap[targetDependency];
 
@@ -50,8 +47,8 @@ const runJob = async (job, context) => {
           name: "targetSource",
           message: lines(
             `Select installation type for new dependency`,
-            chalk`\n  {reset.yellow ${targetPackageName}}`,
-            chalk`{reset.green + ${targetDependency}} {reset.green.bold ${targetVersionResolved}}`,
+            chalk`\n  {reset ${targetPackageName}}`,
+            chalk`{reset.green.bold +} {reset.bold ${targetDependency} ${targetVersionResolved}}`,
             ""
           ),
           pageSize: 3,
@@ -72,10 +69,9 @@ const runJob = async (job, context) => {
       }[flags.newInstallsMode];
     }
 
-    const {
-      path: packageDir,
-      config: { name: packageName },
-    } = packages.find(({ config: { name } }) => name === targetPackageName);
+    const { path: packageDir } = packages.find(
+      ({ config: { name } }) => name === targetPackageName
+    );
 
     const sourceParam = {
       yarn: {
@@ -104,9 +100,10 @@ const runJob = async (job, context) => {
         })
       );
 
-      ui.log.write(
-        chalk`{white.bold ${targetPackageName}}: {green package.json updated ✓}\n`
-      );
+      ui.log.write("");
+      ui.log.write(`package.json updated`);
+      ui.log.write(chalk.green(`${targetPackageName} ✓`));
+      ui.log.write("");
     } else {
       const installCmd =
         dependencyManager === "yarn"
@@ -131,8 +128,10 @@ const runJob = async (job, context) => {
         logTime: true,
       });
     }
+
     totalInstalls++;
   }
+  return totalInstalls;
 };
 
 module.exports = runJob;
