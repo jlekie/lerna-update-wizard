@@ -546,84 +546,86 @@ module.exports = async ({ input, flags }) => {
     chalk.bold(`Installed ${totalInstalls} packages in ${perf.stop().words}`)
   );
 
-  if (!flags.nonInteractive) {
-    const userName = (
-      (await runCommand("git config --get github.user", {
-        logOutput: false,
-      })) ||
-      (await runCommand("whoami", { logOutput: false })) ||
-      "upgrade"
-    )
-      .split("\n")
-      .shift();
+//   if (!flags.nonInteractive) {
+//     const userName = (
+//       (await runCommand("git config --get github.user", {
+//         logOutput: false,
+//       })) ||
+//       (await runCommand("whoami", { logOutput: false })) ||
+//       "upgrade"
+//     )
+//       .split("\n")
+//       .shift();
 
-    const {
-      shouldCreateGitBranch,
-      shouldCreateGitCommit,
-      gitBranchName,
-      gitCommitMessage,
-    } = await inquirer.prompt([
-      {
-        type: "confirm",
-        name: "shouldCreateGitBranch",
-        message: "Do you want to create a new git branch for the change?",
-      },
-      {
-        type: "input",
-        name: "gitBranchName",
-        message: "Enter a name for your branch:",
-        when: ({ shouldCreateGitBranch }) => shouldCreateGitBranch,
-        default: sanitizeGitBranchName(
-          `${userName}/${targetDependency}-${targetVersion}`
-        ),
-      },
-      {
-        type: "confirm",
-        name: "shouldCreateGitCommit",
-        message: "Do you want to create a new git commit for the change?",
-      },
-      {
-        type: "input",
-        name: "gitCommitMessage",
-        message: "Enter a git commit message:",
-        when: ({ shouldCreateGitCommit }) => shouldCreateGitCommit,
-        default: `Upgrade dependency: ${targetDependency}@${targetVersion}`,
-      },
-    ]);
+//     const {
+//       shouldCreateGitBranch,
+//       shouldCreateGitCommit,
+//       gitBranchName,
+//       gitCommitMessage,
+//     } = await inquirer.prompt([
+//       {
+//         type: "confirm",
+//         name: "shouldCreateGitBranch",
+//         message: "Do you want to create a new git branch for the change?",
+//       },
+//       {
+//         type: "input",
+//         name: "gitBranchName",
+//         message: "Enter a name for your branch:",
+//         when: ({ shouldCreateGitBranch }) => shouldCreateGitBranch,
+//         default: sanitizeGitBranchName(
+//           `${userName}/${targetDependency}-${targetVersion}`
+//         ),
+//       },
+//       {
+//         type: "confirm",
+//         name: "shouldCreateGitCommit",
+//         message: "Do you want to create a new git commit for the change?",
+//       },
+//       {
+//         type: "input",
+//         name: "gitCommitMessage",
+//         message: "Enter a git commit message:",
+//         when: ({ shouldCreateGitCommit }) => shouldCreateGitCommit,
+//         default: `Upgrade dependency: ${targetDependency}@${targetVersion}`,
+//       },
+//     ]);
 
-    if (shouldCreateGitBranch) {
-      const createCmd = `git checkout -b ${gitBranchName}`;
-      await runCommand(`cd ${projectDir} && ${createCmd}`, {
-        startMessage: `${chalk.white.bold(projectName)}: ${createCmd}`,
-        endMessage: chalk.green(`Branch created ✓`),
-      });
-    }
+//     if (shouldCreateGitBranch) {
+//       const createCmd = `git checkout -b ${gitBranchName}`;
+//       await runCommand(`cd ${projectDir} && ${createCmd}`, {
+//         startMessage: `${chalk.white.bold(projectName)}: ${createCmd}`,
+//         endMessage: chalk.green(`Branch created ✓`),
+//       });
+//     }
 
-    if (shouldCreateGitCommit) {
-      const subMessage = targetPackages
-        .reduce((prev, depName) => {
-          const fromVersion =
-            !isNewDependency &&
-            dependencyMap[targetDependency].packs[depName].version;
+//     if (shouldCreateGitCommit) {
+//       const subMessage = targetPackages
+//         .reduce((prev, depName) => {
+//           const fromVersion =
+//             !isNewDependency &&
+//             dependencyMap[targetDependency].packs[depName].version;
 
-          if (fromVersion === targetVersion) return prev;
+//           if (fromVersion === targetVersion) return prev;
 
-          return fromVersion
-            ? [...prev, `* ${depName}: ${fromVersion} →  ${targetVersion}`]
-            : [...prev, `* ${depName}: ${targetVersion}`];
-        }, [])
-        .join("\n");
+//           return fromVersion
+//             ? [...prev, `* ${depName}: ${fromVersion} →  ${targetVersion}`]
+//             : [...prev, `* ${depName}: ${targetVersion}`];
+//         }, [])
+//         .join("\n");
 
-      const createCmd = `git add . && git commit -m '${gitCommitMessage}' -m '${subMessage}'`;
-      await runCommand(`cd ${projectDir} && ${createCmd}`, {
-        startMessage: `${chalk.white.bold(
-          projectName
-        )}: git add . && git commit`,
-        endMessage: chalk.green(`Commit created ✓`),
-        logOutput: false,
-      });
-    }
-  } else {
-    process.exit();
-  }
+//       const createCmd = `git add . && git commit -m '${gitCommitMessage}' -m '${subMessage}'`;
+//       await runCommand(`cd ${projectDir} && ${createCmd}`, {
+//         startMessage: `${chalk.white.bold(
+//           projectName
+//         )}: git add . && git commit`,
+//         endMessage: chalk.green(`Commit created ✓`),
+//         logOutput: false,
+//       });
+//     }
+//   } else {
+//     process.exit();
+//   }
+
+  process.exit();
 };
